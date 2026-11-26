@@ -1,0 +1,6 @@
+{
+  "name": "TruckWeight Guard",
+  "description": "Industrial truck weighbridge slip OCR verification, historical weight discrepancy detection in Firestore, and Telegram Bot alert integration.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

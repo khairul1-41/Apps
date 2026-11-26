@@ -1,0 +1,185 @@
+{
+  "entities": {
+    "TruckWeightRecord": {
+      "title": "TruckWeightRecord",
+      "description": "A verified weighbridge document record comparing current truck weight against the latest prior weight for the same vehicle.",
+      "type": "object",
+      "properties": {
+        "userId": {
+          "type": "string",
+          "description": "Authenticated Firebase UID of the operator or owner who saved the record."
+        },
+        "vehicleNumber": {
+          "type": "string",
+          "description": "Display vehicle/truck registration number extracted from the weighbridge slip (e.g. BUG T-11-1633)."
+        },
+        "vehicleKey": {
+          "type": "string",
+          "description": "Normalized uppercase alphanumeric key for strict same-vehicle comparison."
+        },
+        "truckWeight": {
+          "type": "number",
+          "description": "Verified empty/tare/final truck weight in kilograms."
+        },
+        "weightDate": {
+          "type": "string",
+          "description": "Weighing date string extracted or confirmed from the weighbridge document."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when the record was created (FieldValue.serverTimestamp())."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when the record was last updated (FieldValue.serverTimestamp())."
+        },
+        "previousWeight": {
+          "type": "number",
+          "description": "Latest prior valid truck weight in kilograms for the same vehicle, omitted if first record."
+        },
+        "weightDifference": {
+          "type": "number",
+          "description": "Absolute difference in kilograms between truckWeight and previousWeight (0 when no previous record)."
+        },
+        "alertStatus": {
+          "type": "string",
+          "enum": ["NEUTRAL", "GREEN_SIGNAL", "ORANGE_WARNING", "RED_ALERT"],
+          "description": "Alert severity computed from weightDifference against configured thresholds."
+        },
+        "ocrConfidence": {
+          "type": "number",
+          "description": "OCR confidence score between 0.0 and 1.0."
+        },
+        "telegramMessageId": {
+          "type": "string",
+          "description": "Telegram message ID returned by the secure backend relay function."
+        },
+        "documentImageTelegramFileId": {
+          "type": "string",
+          "description": "Telegram file_id of the original weighbridge slip photo sent to the bot."
+        },
+        "sourceLabel": {
+          "type": "string",
+          "description": "Source field label identified on the document (e.g. Tare Weight, First Weight, Second Weight)."
+        },
+        "notes": {
+          "type": "string",
+          "description": "Optional operator or OCR context notes."
+        }
+      },
+      "required": [
+        "userId",
+        "vehicleNumber",
+        "vehicleKey",
+        "truckWeight",
+        "weightDate",
+        "createdAt",
+        "updatedAt",
+        "weightDifference",
+        "alertStatus",
+        "ocrConfidence"
+      ]
+    },
+    "RuntimeSettings": {
+      "title": "RuntimeSettings",
+      "description": "Verification thresholds and OCR/relay runtime settings readable by authenticated operators and writable only by the owner.",
+      "type": "object",
+      "properties": {
+        "neutralMaxKg": {
+          "type": "number",
+          "description": "Maximum absolute KG difference for NEUTRAL status (default 4)."
+        },
+        "greenMaxKg": {
+          "type": "number",
+          "description": "Maximum absolute KG difference for GREEN_SIGNAL status (default 15)."
+        },
+        "orangeMaxKg": {
+          "type": "number",
+          "description": "Maximum absolute KG difference for ORANGE_WARNING status (default 19); above is RED_ALERT."
+        },
+        "minOcrConfidence": {
+          "type": "number",
+          "description": "Minimum OCR confidence (0.0-1.0) below which manual confirmation is forced."
+        },
+        "autoSendTelegram": {
+          "type": "boolean",
+          "description": "Whether confirmed records automatically trigger the backend Telegram relay."
+        },
+        "telegramRelayUrl": {
+          "type": "string",
+          "description": "HTTPS URL of the deployed Firebase Cloud Function relay endpoint."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "neutralMaxKg",
+        "greenMaxKg",
+        "orangeMaxKg",
+        "minOcrConfidence",
+        "autoSendTelegram",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "OwnerAdminConfig": {
+      "title": "OwnerAdminConfig",
+      "description": "Owner-only administrative configuration metadata (never contains raw Telegram Bot Token).",
+      "type": "object",
+      "properties": {
+        "ownerEmail": {
+          "type": "string",
+          "description": "Verified owner email address."
+        },
+        "telegramChatIdLabel": {
+          "type": "string",
+          "description": "Configured Telegram Chat ID reference (or masked identifier) for owner visibility."
+        },
+        "firebaseConfigNote": {
+          "type": "string",
+          "description": "Owner-managed Firebase integration notes or environment identifier."
+        },
+        "ocrStrictFinalWeight": {
+          "type": "boolean",
+          "description": "Enforce strict second/final weighing priority when multiple weighings appear."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "ownerEmail",
+        "ocrStrictFinalWeight",
+        "createdAt",
+        "updatedAt"
+      ]
+    }
+  },
+  "firestore": {
+    "/truck_weight_records/{recordId}": {
+      "schema": { "$ref": "#/entities/TruckWeightRecord" },
+      "description": "Weighbridge verification records scoped by userId, with global read/audit access for the verified owner."
+    },
+    "/app_settings/runtime_config": {
+      "schema": { "$ref": "#/entities/RuntimeSettings" },
+      "description": "Singleton runtime thresholds and relay configuration readable by signed-in operators and writable only by the owner."
+    },
+    "/app_settings/owner_admin": {
+      "schema": { "$ref": "#/entities/OwnerAdminConfig" },
+      "description": "Owner-only admin metadata document."
+    }
+  }
+}

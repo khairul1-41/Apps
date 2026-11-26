@@ -1,0 +1,165 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Global safety net: default deny
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    // Verified application owner (email_verified required to prevent email spoofing)
+    function isOwnerEmail() {
+      return isSignedIn() &&
+        request.auth.token.email == 'lofimusic492@gmail.com' &&
+        request.auth.token.email_verified == true;
+    }
+
+    function isValidAlertStatus(status) {
+      return status is string &&
+        (status == 'NEUTRAL' ||
+         status == 'GREEN_SIGNAL' ||
+         status == 'ORANGE_WARNING' ||
+         status == 'RED_ALERT');
+    }
+
+    function isValidWeightRecord(data) {
+      return data.userId is string && data.userId.size() >= 1 && data.userId.size() <= 128 &&
+        data.vehicleNumber is string && data.vehicleNumber.size() >= 2 && data.vehicleNumber.size() <= 64 &&
+        data.vehicleKey is string && data.vehicleKey.size() >= 2 && data.vehicleKey.size() <= 64 &&
+        data.truckWeight is number && data.truckWeight > 0 && data.truckWeight <= 500000 &&
+        data.weightDate is string && data.weightDate.size() >= 1 && data.weightDate.size() <= 40 &&
+        (!('previousWeight' in data) || (data.previousWeight is number && data.previousWeight > 0 && data.previousWeight <= 500000)) &&
+        data.weightDifference is number && data.weightDifference >= 0 && data.weightDifference <= 500000 &&
+        isValidAlertStatus(data.alertStatus) &&
+        data.ocrConfidence is number && data.ocrConfidence >= 0 && data.ocrConfidence <= 1 &&
+        (!('telegramMessageId' in data) || (data.telegramMessageId is string && data.telegramMessageId.size() <= 128)) &&
+        (!('documentImageTelegramFileId' in data) || (data.documentImageTelegramFileId is string && data.documentImageTelegramFileId.size() <= 256)) &&
+        (!('sourceLabel' in data) || (data.sourceLabel is string && data.sourceLabel.size() <= 64)) &&
+        (!('notes' in data) || (data.notes is string && data.notes.size() <= 500));
+    }
+
+    function isValidRuntimeSettings(data) {
+      return data.neutralMaxKg is number && data.neutralMaxKg >= 0 && data.neutralMaxKg <= 1000 &&
+        data.greenMaxKg is number && data.greenMaxKg >= data.neutralMaxKg && data.greenMaxKg <= 5000 &&
+        data.orangeMaxKg is number && data.orangeMaxKg >= data.greenMaxKg && data.orangeMaxKg <= 10000 &&
+        data.minOcrConfidence is number && data.minOcrConfidence >= 0 && data.minOcrConfidence <= 1 &&
+        data.autoSendTelegram is bool &&
+        (!('telegramRelayUrl' in data) || (data.telegramRelayUrl is string && data.telegramRelayUrl.size() <= 512));
+    }
+
+    function isValidOwnerAdminConfig(data) {
+      return data.ownerEmail is string && data.ownerEmail.size() >= 3 && data.ownerEmail.size() <= 128 &&
+        data.ocrStrictFinalWeight is bool &&
+        (!('telegramChatIdLabel' in data) || (data.telegramChatIdLabel is string && data.telegramChatIdLabel.size() <= 128)) &&
+        (!('firebaseConfigNote' in data) || (data.firebaseConfigNote is string && data.firebaseConfigNote.size() <= 500));
+    }
+
+    match /truck_weight_records/{recordId} {
+      allow get: if isSignedIn() && isValidId(recordId) && (existing().userId == request.auth.uid || isOwnerEmail());
+      allow list: if isSignedIn() && (resource.data.userId == request.auth.uid || isOwnerEmail());
+
+      allow create: if isSignedIn() &&
+        isValidId(recordId) &&
+        incoming().userId == request.auth.uid &&
+        incoming().keys().hasAll([
+          'userId', 'vehicleNumber', 'vehicleKey', 'truckWeight',
+          'weightDate', 'createdAt', 'updatedAt',
+          'weightDifference', 'alertStatus', 'ocrConfidence'
+        ]) &&
+        incoming().keys().hasOnly([
+          'userId', 'vehicleNumber', 'vehicleKey', 'truckWeight',
+          'weightDate', 'createdAt', 'updatedAt',
+          'previousWeight', 'weightDifference', 'alertStatus', 'ocrConfidence',
+          'telegramMessageId', 'documentImageTelegramFileId', 'sourceLabel', 'notes'
+        ]) &&
+        incoming().createdAt is timestamp && incoming().createdAt <= request.time &&
+        incoming().updatedAt is timestamp && incoming().updatedAt <= request.time &&
+        isValidWeightRecord(incoming());
+
+      allow update: if isSignedIn() &&
+        isValidId(recordId) &&
+        isValidWeightRecord(incoming()) &&
+        (existing().userId == request.auth.uid || isOwnerEmail()) &&
+        incoming().userId == existing().userId &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().updatedAt is timestamp && incoming().updatedAt <= request.time &&
+        (
+          incoming().diff(existing()).affectedKeys().hasOnly(['telegramMessageId', 'documentImageTelegramFileId', 'notes', 'updatedAt']) ||
+          (isOwnerEmail() && incoming().diff(existing()).affectedKeys().hasOnly([
+            'vehicleNumber', 'vehicleKey', 'truckWeight', 'weightDate',
+            'previousWeight', 'weightDifference', 'alertStatus', 'ocrConfidence',
+            'telegramMessageId', 'documentImageTelegramFileId', 'sourceLabel', 'notes', 'updatedAt'
+          ]))
+        );
+
+      allow delete: if isSignedIn() && isValidId(recordId) && (existing().userId == request.auth.uid || isOwnerEmail());
+    }
+
+    match /app_settings/runtime_config {
+      allow get: if isSignedIn();
+      allow list, delete: if false;
+
+      allow create: if isOwnerEmail() &&
+        incoming().keys().hasAll([
+          'neutralMaxKg', 'greenMaxKg', 'orangeMaxKg',
+          'minOcrConfidence', 'autoSendTelegram', 'createdAt', 'updatedAt'
+        ]) &&
+        incoming().keys().hasOnly([
+          'neutralMaxKg', 'greenMaxKg', 'orangeMaxKg',
+          'minOcrConfidence', 'autoSendTelegram', 'telegramRelayUrl',
+          'createdAt', 'updatedAt'
+        ]) &&
+        incoming().createdAt is timestamp && incoming().createdAt <= request.time &&
+        incoming().updatedAt is timestamp && incoming().updatedAt <= request.time &&
+        isValidRuntimeSettings(incoming());
+
+      allow update: if isOwnerEmail() &&
+        isValidRuntimeSettings(incoming()) &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().updatedAt is timestamp && incoming().updatedAt <= request.time &&
+        incoming().diff(existing()).affectedKeys().hasOnly([
+          'neutralMaxKg', 'greenMaxKg', 'orangeMaxKg',
+          'minOcrConfidence', 'autoSendTelegram', 'telegramRelayUrl', 'updatedAt'
+        ]);
+    }
+
+    match /app_settings/owner_admin {
+      allow get: if isOwnerEmail();
+      allow list, delete: if false;
+
+      allow create: if isOwnerEmail() &&
+        incoming().keys().hasAll(['ownerEmail', 'ocrStrictFinalWeight', 'createdAt', 'updatedAt']) &&
+        incoming().keys().hasOnly([
+          'ownerEmail', 'ocrStrictFinalWeight', 'telegramChatIdLabel',
+          'firebaseConfigNote', 'createdAt', 'updatedAt'
+        ]) &&
+        incoming().createdAt is timestamp && incoming().createdAt <= request.time &&
+        incoming().updatedAt is timestamp && incoming().updatedAt <= request.time &&
+        isValidOwnerAdminConfig(incoming());
+
+      allow update: if isOwnerEmail() &&
+        isValidOwnerAdminConfig(incoming()) &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().updatedAt is timestamp && incoming().updatedAt <= request.time &&
+        incoming().diff(existing()).affectedKeys().hasOnly([
+          'ownerEmail', 'ocrStrictFinalWeight', 'telegramChatIdLabel',
+          'firebaseConfigNote', 'updatedAt'
+        ]);
+    }
+  }
+}
