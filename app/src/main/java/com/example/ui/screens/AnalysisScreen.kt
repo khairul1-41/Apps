@@ -20,6 +20,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -32,10 +33,12 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.CropRotate
 import androidx.compose.material.icons.filled.Error
+import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Refresh
-import androidx.compose.material.icons.filled.Send
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Button
@@ -49,6 +52,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
@@ -64,6 +68,7 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import coil.compose.AsyncImage
 import com.example.data.remote.TelegramDispatchResult
@@ -92,17 +97,9 @@ fun AnalysisScreen(
     analysisState: AnalysisUiState,
     previewImageUri: Uri?,
     isRetryingTelegram: Boolean,
-    onUpdateForm: (
-        vehicleNumber: String?,
-        weightText: String?,
-        weightDate: String?,
-        sourceLabel: String?,
-        notes: String?,
-        duplicateOverride: Boolean?
-    ) -> Unit,
+    onDuplicateOverrideChange: (Boolean) -> Unit,
     onConfirmAndSave: () -> Unit,
     onRetryOcr: () -> Unit,
-    onEnterManually: () -> Unit,
     onRetryTelegram: () -> Unit,
     onGoToSettings: () -> Unit,
     onDoneHome: () -> Unit,
@@ -161,8 +158,9 @@ fun AnalysisScreen(
                         validationError = analysisState.validationError,
                         previewImageUri = previewImageUri,
                         isSaving = false,
-                        onUpdateForm = onUpdateForm,
-                        onConfirmAndSave = onConfirmAndSave
+                        onDuplicateOverrideChange = onDuplicateOverrideChange,
+                        onConfirmAndSave = onConfirmAndSave,
+                        onRecropSlip = onBackClick
                     )
                 }
 
@@ -172,8 +170,9 @@ fun AnalysisScreen(
                         validationError = null,
                         previewImageUri = previewImageUri,
                         isSaving = true,
-                        onUpdateForm = onUpdateForm,
-                        onConfirmAndSave = {}
+                        onDuplicateOverrideChange = {},
+                        onConfirmAndSave = {},
+                        onRecropSlip = {}
                     )
                 }
 
@@ -192,7 +191,6 @@ fun AnalysisScreen(
                     AnalysisErrorView(
                         message = analysisState.message,
                         onRetryOcr = onRetryOcr,
-                        onEnterManually = onEnterManually,
                         onBack = onBackClick
                     )
                 }
@@ -303,12 +301,21 @@ private fun AnalysisReviewView(
     validationError: String?,
     previewImageUri: Uri?,
     isSaving: Boolean,
-    onUpdateForm: (String?, String?, String?, String?, String?, Boolean?) -> Unit,
-    onConfirmAndSave: () -> Unit
+    onDuplicateOverrideChange: (Boolean) -> Unit,
+    onConfirmAndSave: () -> Unit,
+    onRecropSlip: () -> Unit
 ) {
     val extraction = form.extraction
     val comparison = form.comparison
     val alertStyle = alertVisualStyle(comparison.alertStatus)
+    val lockedFieldColors = OutlinedTextFieldDefaults.colors(
+        disabledTextColor = NavyPrimary,
+        disabledBorderColor = SlateBorder,
+        disabledLabelColor = SlateTextSecondary,
+        disabledLeadingIconColor = SlateTextSecondary,
+        disabledTrailingIconColor = SlateTextSecondary,
+        disabledContainerColor = SlateBackground
+    )
 
     Column(
         modifier = Modifier
@@ -333,13 +340,13 @@ private fun AnalysisReviewView(
                 Column(modifier = Modifier.weight(1f)) {
                     val confPct = ((extraction?.confidence ?: 1.0) * 100).roundToInt()
                     Text(
-                        text = if (extraction != null) "OCR Confidence: $confPct%" else "Manual Verification Entry",
+                        text = "OCR Confidence: $confPct% (Locked)",
                         style = MaterialTheme.typography.titleMedium,
                         color = NavyPrimary
                     )
                     if (!extraction?.reasoning.isNullOrBlank()) {
                         Text(
-                            text = extraction!!.reasoning,
+                            text = extraction.reasoning,
                             style = MaterialTheme.typography.bodySmall,
                             color = SlateTextSecondary,
                             maxLines = 3
@@ -362,11 +369,11 @@ private fun AnalysisReviewView(
                 ) {
                     Icon(
                         imageVector = Icons.Filled.Warning,
-                        contentDescription = "Manual confirmation required",
+                        contentDescription = "Low OCR confidence warning",
                         tint = WarningOrange
                     )
                     Text(
-                        text = "Manual confirmation recommended: Please verify vehicle number, final truck/tare weight, and date against the slip before saving.",
+                        text = "Low OCR confidence: Please visually verify the locked fields below match your slip photo, or tap Re-crop / Rescan if unreadable.",
                         style = MaterialTheme.typography.bodySmall,
                         color = NavyPrimary
                     )
@@ -394,7 +401,7 @@ private fun AnalysisReviewView(
             }
         }
 
-        // Editable Fields Card
+        // Locked Read-Only OCR Fields Card (Manual editing disabled)
         Card(
             shape = RoundedCornerShape(18.dp),
             colors = CardDefaults.cardColors(containerColor = PureWhite),
@@ -404,18 +411,63 @@ private fun AnalysisReviewView(
                 modifier = Modifier.padding(16.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = "OCR Extracted Weighbridge Data",
+                        style = MaterialTheme.typography.titleMedium,
+                        color = NavyPrimary
+                    )
+                    Surface(
+                        color = SlateBackground,
+                        shape = RoundedCornerShape(999.dp),
+                        border = BorderStroke(1.dp, SlateBorder)
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(4.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Filled.Lock,
+                                contentDescription = "Locked read-only OCR fields",
+                                tint = SlateTextSecondary,
+                                modifier = Modifier.size(13.dp)
+                            )
+                            Text(
+                                text = "OCR ONLY",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = SlateTextSecondary,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+                    }
+                }
+
                 Text(
-                    text = "Extracted Weighbridge Data (Editable)",
-                    style = MaterialTheme.typography.titleMedium,
-                    color = NavyPrimary
+                    text = "All fields are strictly locked to OCR scan output. Manual typing is disabled.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = SlateTextSecondary
                 )
 
                 OutlinedTextField(
                     value = form.vehicleNumberInput,
-                    onValueChange = { onUpdateForm(it, null, null, null, null, null) },
-                    label = { Text("Vehicle Number (e.g. BUG T-11-1633)") },
+                    onValueChange = {},
+                    readOnly = true,
+                    enabled = false,
+                    label = { Text("Vehicle Number (Locked)") },
+                    trailingIcon = {
+                        Icon(
+                            imageVector = Icons.Filled.Lock,
+                            contentDescription = "Locked",
+                            modifier = Modifier.size(16.dp)
+                        )
+                    },
+                    colors = lockedFieldColors,
                     singleLine = true,
-                    enabled = !isSaving,
                     modifier = Modifier
                         .fillMaxWidth()
                         .testTag("analysis_vehicle_input")
@@ -427,10 +479,19 @@ private fun AnalysisReviewView(
                 ) {
                     OutlinedTextField(
                         value = form.weightInput,
-                        onValueChange = { onUpdateForm(null, it, null, null, null, null) },
+                        onValueChange = {},
+                        readOnly = true,
+                        enabled = false,
                         label = { Text("Truck Weight (KG)") },
+                        trailingIcon = {
+                            Icon(
+                                imageVector = Icons.Filled.Lock,
+                                contentDescription = "Locked",
+                                modifier = Modifier.size(16.dp)
+                            )
+                        },
+                        colors = lockedFieldColors,
                         singleLine = true,
-                        enabled = !isSaving,
                         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
                         modifier = Modifier
                             .weight(1f)
@@ -438,10 +499,19 @@ private fun AnalysisReviewView(
                     )
                     OutlinedTextField(
                         value = form.weightDateInput,
-                        onValueChange = { onUpdateForm(null, null, it, null, null, null) },
+                        onValueChange = {},
+                        readOnly = true,
+                        enabled = false,
                         label = { Text("Weight Date") },
+                        trailingIcon = {
+                            Icon(
+                                imageVector = Icons.Filled.Lock,
+                                contentDescription = "Locked",
+                                modifier = Modifier.size(16.dp)
+                            )
+                        },
+                        colors = lockedFieldColors,
                         singleLine = true,
-                        enabled = !isSaving,
                         modifier = Modifier
                             .weight(1f)
                             .testTag("analysis_date_input")
@@ -450,11 +520,22 @@ private fun AnalysisReviewView(
 
                 OutlinedTextField(
                     value = form.sourceLabelInput,
-                    onValueChange = { onUpdateForm(null, null, null, it, null, null) },
+                    onValueChange = {},
+                    readOnly = true,
+                    enabled = false,
                     label = { Text("Detected Weight Label") },
+                    trailingIcon = {
+                        Icon(
+                            imageVector = Icons.Filled.Lock,
+                            contentDescription = "Locked",
+                            modifier = Modifier.size(16.dp)
+                        )
+                    },
+                    colors = lockedFieldColors,
                     singleLine = true,
-                    enabled = !isSaving,
-                    modifier = Modifier.fillMaxWidth()
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("analysis_source_label_input")
                 )
             }
         }
@@ -566,7 +647,7 @@ private fun AnalysisReviewView(
                     }
                     Switch(
                         checked = form.duplicateOverrideConfirmed,
-                        onCheckedChange = { onUpdateForm(null, null, null, null, null, it) },
+                        onCheckedChange = onDuplicateOverrideChange,
                         enabled = !isSaving
                     )
                 }
@@ -610,7 +691,7 @@ private fun AnalysisReviewView(
                 Spacer(modifier = Modifier.width(10.dp))
                 Text("Saving & Dispatching...")
             } else {
-                Icon(imageVector = Icons.Filled.Send, contentDescription = null, modifier = Modifier.size(20.dp))
+                Icon(imageVector = Icons.AutoMirrored.Filled.Send, contentDescription = null, modifier = Modifier.size(20.dp))
                 Spacer(modifier = Modifier.width(10.dp))
                 Text(
                     text = "Confirm, Save & Send to Telegram",
@@ -618,6 +699,21 @@ private fun AnalysisReviewView(
                     fontWeight = FontWeight.Bold
                 )
             }
+        }
+
+        OutlinedButton(
+            onClick = onRecropSlip,
+            enabled = !isSaving,
+            shape = RoundedCornerShape(14.dp),
+            border = BorderStroke(1.dp, SlateBorder),
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(48.dp)
+                .testTag("analysis_recrop_button")
+        ) {
+            Icon(imageVector = Icons.Filled.CropRotate, contentDescription = null, tint = NavyPrimary)
+            Spacer(modifier = Modifier.width(8.dp))
+            Text("Re-crop / Rescan Slip", color = NavyPrimary)
         }
 
         Spacer(modifier = Modifier.height(16.dp))
@@ -790,52 +886,81 @@ private fun AnalysisCompletedView(
 private fun AnalysisErrorView(
     message: String,
     onRetryOcr: () -> Unit,
-    onEnterManually: () -> Unit,
     onBack: () -> Unit
 ) {
+    val isAppCheckFailure = message.contains("App Check", ignoreCase = true) ||
+        message.contains("attestation", ignoreCase = true)
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val clipboardManager = androidx.compose.ui.platform.LocalClipboardManager.current
+
     Card(
         shape = RoundedCornerShape(20.dp),
         colors = CardDefaults.cardColors(containerColor = PureWhite),
-        border = BorderStroke(1.dp, AlertRed.copy(alpha = 0.4f))
+        border = BorderStroke(1.dp, AlertRed.copy(alpha = 0.4f)),
+        modifier = Modifier.fillMaxWidth()
     ) {
         Column(
-            modifier = Modifier.padding(24.dp),
-            verticalArrangement = Arrangement.spacedBy(14.dp),
+            modifier = Modifier
+                .fillMaxWidth()
+                .verticalScroll(rememberScrollState())
+                .padding(18.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
             Icon(
                 imageVector = Icons.Filled.Error,
                 contentDescription = "OCR Error",
                 tint = AlertRed,
-                modifier = Modifier.size(44.dp)
+                modifier = Modifier.size(36.dp)
             )
             Text(
                 text = "OCR Recognition Interrupted",
                 style = MaterialTheme.typography.titleLarge,
-                color = NavyPrimary
+                color = NavyPrimary,
+                textAlign = TextAlign.Center
             )
-            Text(
-                text = message,
-                style = MaterialTheme.typography.bodyMedium,
-                color = SlateTextSecondary
-            )
+            Surface(
+                color = AlertRedContainer.copy(alpha = 0.55f),
+                shape = RoundedCornerShape(12.dp),
+                border = BorderStroke(1.dp, AlertRed.copy(alpha = 0.25f)),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text(
+                    text = message,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = NavyPrimary,
+                    modifier = Modifier.padding(12.dp)
+                )
+            }
+            if (isAppCheckFailure) {
+                OutlinedButton(
+                    onClick = {
+                        clipboardManager.setText(androidx.compose.ui.text.AnnotatedString(message))
+                        android.widget.Toast.makeText(
+                            context,
+                            "App Check details copied.",
+                            android.widget.Toast.LENGTH_SHORT
+                        ).show()
+                    },
+                    modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)
+                ) {
+                    Text("Copy App Check Details", textAlign = TextAlign.Center)
+                }
+            }
             Button(
                 onClick = onRetryOcr,
-                modifier = Modifier.fillMaxWidth().height(50.dp),
+                modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
                 colors = ButtonDefaults.buttonColors(containerColor = NavyPrimary)
             ) {
                 Icon(imageVector = Icons.Filled.Refresh, contentDescription = null)
                 Spacer(modifier = Modifier.width(8.dp))
-                Text("Retry OCR Analysis")
+                Text("Retry OCR Analysis", textAlign = TextAlign.Center)
             }
             OutlinedButton(
-                onClick = onEnterManually,
-                modifier = Modifier.fillMaxWidth().height(50.dp)
+                onClick = onBack,
+                modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)
             ) {
-                Text("Enter Weight Manually")
-            }
-            OutlinedButton(onClick = onBack) {
-                Text("Back to Preview")
+                Text("Back to Crop / Rescan", textAlign = TextAlign.Center)
             }
         }
     }

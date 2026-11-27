@@ -87,6 +87,7 @@ fun HistoryScreen(
     onSearchQueryChange: (String) -> Unit,
     onAlertFilterChange: (AlertStatus?) -> Unit,
     onDateFilterChange: (String) -> Unit,
+    canDeleteRecord: (TruckWeightRecord) -> Boolean,
     onDeleteRecord: (String) -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -416,8 +417,13 @@ fun HistoryScreen(
                                 }
 
                                 val confPct = (item.ocrConfidence * 100).roundToInt()
+                                val creatorLine = if (!item.createdByEmail.isNullOrBlank()) {
+                                    "  •  Added by: ${item.createdByEmail}" + (item.createdByRole?.let { " ($it)" }.orEmpty())
+                                } else {
+                                    ""
+                                }
                                 Text(
-                                    text = "Label: ${item.sourceLabel ?: "Tare"}  •  OCR: $confPct%  •  Synced: ${WeightVerificationEngine.formatTimestamp(item.createdAt)}",
+                                    text = "Label: ${item.sourceLabel ?: "Tare"}  •  OCR: $confPct%  •  Synced: ${WeightVerificationEngine.formatTimestamp(item.createdAt)}$creatorLine",
                                     style = MaterialTheme.typography.labelSmall,
                                     color = SlateTextSecondary
                                 )
@@ -437,21 +443,23 @@ fun HistoryScreen(
                                     }
                                 }
 
-                                Row(
-                                    modifier = Modifier.fillMaxWidth(),
-                                    horizontalArrangement = Arrangement.End
-                                ) {
-                                    TextButton(
-                                        onClick = { onDeleteRecord(item.id) }
+                                if (canDeleteRecord(item)) {
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.End
                                     ) {
-                                        Icon(
-                                            imageVector = Icons.Filled.DeleteOutline,
-                                            contentDescription = "Delete record",
-                                            tint = AlertRed,
-                                            modifier = Modifier.size(16.dp)
-                                        )
-                                        Spacer(modifier = Modifier.width(4.dp))
-                                        Text("Delete", color = AlertRed)
+                                        TextButton(
+                                            onClick = { onDeleteRecord(item.id) }
+                                        ) {
+                                            Icon(
+                                                imageVector = Icons.Filled.DeleteOutline,
+                                                contentDescription = "Delete record",
+                                                tint = AlertRed,
+                                                modifier = Modifier.size(16.dp)
+                                            )
+                                            Spacer(modifier = Modifier.width(4.dp))
+                                            Text("Delete", color = AlertRed)
+                                        }
                                     }
                                 }
                             }

@@ -10,8 +10,26 @@ service cloud.firestore {
       return request.auth != null;
     }
 
+    function hasVerifiedEmail() {
+      return isSignedIn() &&
+        ('email' in request.auth.token) &&
+        request.auth.token.email is string &&
+        request.auth.token.email_verified == true;
+    }
+
+    function callerEmailLower() {
+      return request.auth.token.email.lower();
+    }
+
     function isValidId(id) {
       return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function isValidEmailDocId(id) {
+      return id is string &&
+        id.size() >= 5 &&
+        id.size() <= 128 &&
+        id.matches('^[a-z0-9._%+\\-]+@[a-z0-9.\\-]+\\.[a-z]{2,}$');
     }
 
     function incoming() {
@@ -22,11 +40,52 @@ service cloud.firestore {
       return resource.data;
     }
 
-    // Verified application owner (email_verified required to prevent email spoofing)
+    function memberDocPath(emailLower) {
+      return /databases/$(database)/documents/authorized_users/$(emailLower);
+    }
+
+    // Verified application owner (email_verified required to prevent spoofing)
     function isOwnerEmail() {
-      return isSignedIn() &&
-        request.auth.token.email == 'lofimusic492@gmail.com' &&
-        request.auth.token.email_verified == true;
+      return hasVerifiedEmail() && callerEmailLower() == 'lofimusic492@gmail.com';
+    }
+
+    // Listed member roles managed under /authorized_users/{emailLower}
+    function isListedAdmin() {
+      return hasVerifiedEmail() &&
+        exists(memberDocPath(callerEmailLower())) &&
+        get(memberDocPath(callerEmailLower())).data.role == 'ADMIN';
+    }
+
+    function isListedUser() {
+      return hasVerifiedEmail() &&
+        exists(memberDocPath(callerEmailLower())) &&
+        get(memberDocPath(callerEmailLower())).data.role == 'USER';
+    }
+
+    function isAdminOrOwner() {
+      return isOwnerEmail() || isListedAdmin();
+    }
+
+    function isAuthorizedMember() {
+      return isOwnerEmail() || isListedAdmin() || isListedUser();
+    }
+
+    function isValidMemberRole(role) {
+      return role is string && (role == 'ADMIN' || role == 'USER');
+    }
+
+    function isValidRecordCreatorRole(role) {
+      return role is string && (role == 'OWNER' || role == 'ADMIN' || role == 'USER');
+    }
+
+    function isValidAuthorizedMember(memberEmail, data) {
+      return isValidEmailDocId(memberEmail) &&
+        memberEmail != 'lofimusic492@gmail.com' &&
+        data.email is string && data.email == memberEmail &&
+        isValidMemberRole(data.role) &&
+        (!('displayName' in data) || (data.displayName is string && data.displayName.size() <= 80)) &&
+        data.addedByEmail is string && data.addedByEmail.size() >= 5 && data.addedByEmail.size() <= 128 &&
+        data.addedByUid is string && data.addedByUid.size() >= 1 && data.addedByUid.size() <= 128;
     }
 
     function isValidAlertStatus(status) {
@@ -39,6 +98,8 @@ service cloud.firestore {
 
     function isValidWeightRecord(data) {
       return data.userId is string && data.userId.size() >= 1 && data.userId.size() <= 128 &&
+        (!('createdByEmail' in data) || (data.createdByEmail is string && data.createdByEmail.size() <= 128)) &&
+        (!('createdByRole' in data) || isValidRecordCreatorRole(data.createdByRole)) &&
         data.vehicleNumber is string && data.vehicleNumber.size() >= 2 && data.vehicleNumber.size() <= 64 &&
         data.vehicleKey is string && data.vehicleKey.size() >= 2 && data.vehicleKey.size() <= 64 &&
         data.truckWeight is number && data.truckWeight > 0 && data.truckWeight <= 500000 &&
@@ -59,7 +120,12 @@ service cloud.firestore {
         data.orangeMaxKg is number && data.orangeMaxKg >= data.greenMaxKg && data.orangeMaxKg <= 10000 &&
         data.minOcrConfidence is number && data.minOcrConfidence >= 0 && data.minOcrConfidence <= 1 &&
         data.autoSendTelegram is bool &&
-        (!('telegramRelayUrl' in data) || (data.telegramRelayUrl is string && data.telegramRelayUrl.size() <= 512));
+        (!('telegramRelayUrl' in data) || (data.telegramRelayUrl is string && data.telegramRelayUrl.size() <= 512)) &&
+        (!('appCheckDebugToken' in data) || (
+          data.appCheckDebugToken is string &&
+          (data.appCheckDebugToken.size() == 0 ||
+            data.appCheckDebugToken.matches('^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$'))
+        ));
     }
 
     function isValidOwnerAdminConfig(data) {
@@ -69,11 +135,105 @@ service cloud.firestore {
         (!('firebaseConfigNote' in data) || (data.firebaseConfigNote is string && data.firebaseConfigNote.size() <= 500));
     }
 
-    match /truck_weight_records/{recordId} {
-      allow get: if isSignedIn() && isValidId(recordId) && (existing().userId == request.auth.uid || isOwnerEmail());
-      allow list: if isSignedIn() && (resource.data.userId == request.auth.uid || isOwnerEmail());
+    function isValidAdsConfig(data) {
+      return data.adsEnabled is bool &&
+        data.adsMode is string &&
+        (data.adsMode == 'AD_CODE' || data.adsMode == 'SPONSORED_CARD') &&
+        (!('adCodeSnippet' in data) || (data.adCodeSnippet is string && data.adCodeSnippet.size() <= 4096)) &&
+        (!('sponsorTitle' in data) || (data.sponsorTitle is string && data.sponsorTitle.size() <= 120)) &&
+        (!('sponsorSubtitle' in data) || (data.sponsorSubtitle is string && data.sponsorSubtitle.size() <= 240)) &&
+        (!('sponsorCtaLabel' in data) || (data.sponsorCtaLabel is string && data.sponsorCtaLabel.size() <= 32)) &&
+        (!('sponsorTargetUrl' in data) || (
+          data.sponsorTargetUrl is string &&
+          data.sponsorTargetUrl.size() <= 512 &&
+          (data.sponsorTargetUrl.size() == 0 || data.sponsorTargetUrl.matches('^https://[^\\s]+$'))
+        )) &&
+        data.updatedByEmail is string &&
+        data.updatedByEmail == callerEmailLower();
+    }
 
-      allow create: if isSignedIn() &&
+    function isValidSlipRegionBox(box) {
+      return box is map &&
+        box.keys().hasAll(['left', 'top', 'right', 'bottom']) &&
+        box.keys().hasOnly(['left', 'top', 'right', 'bottom']) &&
+        box.left is number && box.top is number && box.right is number && box.bottom is number &&
+        box.left >= 0 && box.top >= 0 && box.right <= 1 && box.bottom <= 1 &&
+        box.right > box.left && box.bottom > box.top;
+    }
+
+    function isValidSlipTemplate(data) {
+      return data.formatName is string && data.formatName.size() >= 2 && data.formatName.size() <= 80 &&
+        (!('headerHint' in data) || (data.headerHint is string && data.headerHint.size() <= 120)) &&
+        isValidSlipRegionBox(data.vehicleBox) &&
+        (!('vehicleLabelHint' in data) || (data.vehicleLabelHint is string && data.vehicleLabelHint.size() <= 64)) &&
+        isValidSlipRegionBox(data.weightBox) &&
+        (!('weightLabelHint' in data) || (data.weightLabelHint is string && data.weightLabelHint.size() <= 64)) &&
+        (!('dateBox' in data) || isValidSlipRegionBox(data.dateBox)) &&
+        (!('dateLabelHint' in data) || (data.dateLabelHint is string && data.dateLabelHint.size() <= 64)) &&
+        (!('notes' in data) || (data.notes is string && data.notes.size() <= 240)) &&
+        data.isActive is bool &&
+        data.createdByEmail is string && data.createdByEmail == callerEmailLower() &&
+        data.createdByUid is string && data.createdByUid == request.auth.uid;
+    }
+
+    function isValidAppUpdateRelease(data) {
+      return data.versionCode is int && data.versionCode >= 1 && data.versionCode <= 999999999 &&
+        data.versionName is string && data.versionName.size() >= 1 && data.versionName.size() <= 32 &&
+        data.fileName is string && data.fileName.size() >= 5 && data.fileName.size() <= 128 &&
+        data.fileName.matches('^.*\\.[aA][pP][kK]$') &&
+        data.fileSizeBytes is int && data.fileSizeBytes >= 1024 && data.fileSizeBytes <= 1073741824 &&
+        data.sha256Checksum is string && data.sha256Checksum.size() == 64 &&
+        data.sha256Checksum.matches('^[a-fA-F0-9]{64}$') &&
+        data.downloadUrl is string && data.downloadUrl.size() >= 12 && data.downloadUrl.size() <= 1024 &&
+        data.downloadUrl.matches('^https://[^\\s]+$') &&
+        data.releaseNotes is string && data.releaseNotes.size() <= 500 &&
+        data.isMandatory is bool &&
+        data.publishedByEmail is string && data.publishedByEmail == callerEmailLower() &&
+        data.publishedByUid is string && data.publishedByUid == request.auth.uid &&
+        data.publishedByRole is string &&
+        ((isOwnerEmail() && data.publishedByRole == 'OWNER') || (!isOwnerEmail() && isListedAdmin() && data.publishedByRole == 'ADMIN'));
+    }
+
+    // Managed team & role directory
+    match /authorized_users/{memberEmail} {
+      // Any verified Google-signed-in user can read only their OWN membership doc; Admins & Owner can inspect all
+      allow get: if hasVerifiedEmail() && (memberEmail == callerEmailLower() || isAdminOrOwner());
+      allow list: if isAdminOrOwner();
+
+      // Owner can add ADMIN or USER; Admin can add ONLY USER
+      allow create: if isAdminOrOwner() &&
+        isValidAuthorizedMember(memberEmail, incoming()) &&
+        incoming().addedByUid == request.auth.uid &&
+        incoming().addedByEmail == callerEmailLower() &&
+        incoming().keys().hasAll(['email', 'role', 'addedByEmail', 'addedByUid', 'createdAt', 'updatedAt']) &&
+        incoming().keys().hasOnly(['email', 'displayName', 'role', 'addedByEmail', 'addedByUid', 'createdAt', 'updatedAt']) &&
+        incoming().createdAt is timestamp && incoming().createdAt <= request.time &&
+        incoming().updatedAt is timestamp && incoming().updatedAt <= request.time &&
+        (isOwnerEmail() || incoming().role == 'USER');
+
+      // Only the verified Owner can promote/demote roles (make/remove Admin) or edit member entries
+      allow update: if isOwnerEmail() &&
+        isValidAuthorizedMember(memberEmail, incoming()) &&
+        incoming().email == existing().email &&
+        incoming().addedByEmail == existing().addedByEmail &&
+        incoming().addedByUid == existing().addedByUid &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().updatedAt is timestamp && incoming().updatedAt <= request.time &&
+        incoming().diff(existing()).affectedKeys().hasOnly(['role', 'displayName', 'updatedAt']);
+
+      // Owner can delete any member (ADMIN or USER); Admin can delete ONLY USERs
+      allow delete: if isAdminOrOwner() &&
+        isValidEmailDocId(memberEmail) &&
+        memberEmail != 'lofimusic492@gmail.com' &&
+        (isOwnerEmail() || existing().role == 'USER');
+    }
+
+    // Shared weighbridge verification records across all authorized team members (Users, Admins, Owner)
+    match /truck_weight_records/{recordId} {
+      allow get: if isAuthorizedMember() && isValidId(recordId);
+      allow list: if isAuthorizedMember();
+
+      allow create: if isAuthorizedMember() &&
         isValidId(recordId) &&
         incoming().userId == request.auth.uid &&
         incoming().keys().hasAll([
@@ -82,7 +242,8 @@ service cloud.firestore {
           'weightDifference', 'alertStatus', 'ocrConfidence'
         ]) &&
         incoming().keys().hasOnly([
-          'userId', 'vehicleNumber', 'vehicleKey', 'truckWeight',
+          'userId', 'createdByEmail', 'createdByRole',
+          'vehicleNumber', 'vehicleKey', 'truckWeight',
           'weightDate', 'createdAt', 'updatedAt',
           'previousWeight', 'weightDifference', 'alertStatus', 'ocrConfidence',
           'telegramMessageId', 'documentImageTelegramFileId', 'sourceLabel', 'notes'
@@ -91,27 +252,29 @@ service cloud.firestore {
         incoming().updatedAt is timestamp && incoming().updatedAt <= request.time &&
         isValidWeightRecord(incoming());
 
-      allow update: if isSignedIn() &&
+      allow update: if isAuthorizedMember() &&
         isValidId(recordId) &&
         isValidWeightRecord(incoming()) &&
-        (existing().userId == request.auth.uid || isOwnerEmail()) &&
+        (existing().userId == request.auth.uid || isAdminOrOwner()) &&
         incoming().userId == existing().userId &&
         incoming().createdAt == existing().createdAt &&
         incoming().updatedAt is timestamp && incoming().updatedAt <= request.time &&
         (
           incoming().diff(existing()).affectedKeys().hasOnly(['telegramMessageId', 'documentImageTelegramFileId', 'notes', 'updatedAt']) ||
-          (isOwnerEmail() && incoming().diff(existing()).affectedKeys().hasOnly([
+          (isAdminOrOwner() && incoming().diff(existing()).affectedKeys().hasOnly([
             'vehicleNumber', 'vehicleKey', 'truckWeight', 'weightDate',
             'previousWeight', 'weightDifference', 'alertStatus', 'ocrConfidence',
             'telegramMessageId', 'documentImageTelegramFileId', 'sourceLabel', 'notes', 'updatedAt'
           ]))
         );
 
-      allow delete: if isSignedIn() && isValidId(recordId) && (existing().userId == request.auth.uid || isOwnerEmail());
+      allow delete: if isAuthorizedMember() &&
+        isValidId(recordId) &&
+        (existing().userId == request.auth.uid || isAdminOrOwner());
     }
 
     match /app_settings/runtime_config {
-      allow get: if isSignedIn();
+      allow get: if isAuthorizedMember();
       allow list, delete: if false;
 
       allow create: if isOwnerEmail() &&
@@ -122,7 +285,7 @@ service cloud.firestore {
         incoming().keys().hasOnly([
           'neutralMaxKg', 'greenMaxKg', 'orangeMaxKg',
           'minOcrConfidence', 'autoSendTelegram', 'telegramRelayUrl',
-          'createdAt', 'updatedAt'
+          'appCheckDebugToken', 'createdAt', 'updatedAt'
         ]) &&
         incoming().createdAt is timestamp && incoming().createdAt <= request.time &&
         incoming().updatedAt is timestamp && incoming().updatedAt <= request.time &&
@@ -134,7 +297,8 @@ service cloud.firestore {
         incoming().updatedAt is timestamp && incoming().updatedAt <= request.time &&
         incoming().diff(existing()).affectedKeys().hasOnly([
           'neutralMaxKg', 'greenMaxKg', 'orangeMaxKg',
-          'minOcrConfidence', 'autoSendTelegram', 'telegramRelayUrl', 'updatedAt'
+          'minOcrConfidence', 'autoSendTelegram', 'telegramRelayUrl',
+          'appCheckDebugToken', 'updatedAt'
         ]);
     }
 
@@ -160,6 +324,98 @@ service cloud.firestore {
           'ownerEmail', 'ocrStrictFinalWeight', 'telegramChatIdLabel',
           'firebaseConfigNote', 'updatedAt'
         ]);
+    }
+
+    match /app_settings/app_update {
+      allow get: if isAuthorizedMember();
+      allow list: if false;
+
+      allow create: if isAdminOrOwner() &&
+        incoming().keys().hasAll([
+          'versionCode', 'versionName', 'fileName', 'fileSizeBytes', 'sha256Checksum',
+          'downloadUrl', 'releaseNotes', 'isMandatory',
+          'publishedByEmail', 'publishedByRole', 'publishedByUid', 'createdAt', 'updatedAt'
+        ]) &&
+        incoming().keys().hasOnly([
+          'versionCode', 'versionName', 'fileName', 'fileSizeBytes', 'sha256Checksum',
+          'downloadUrl', 'releaseNotes', 'isMandatory',
+          'publishedByEmail', 'publishedByRole', 'publishedByUid', 'createdAt', 'updatedAt'
+        ]) &&
+        incoming().createdAt is timestamp && incoming().createdAt <= request.time &&
+        incoming().updatedAt is timestamp && incoming().updatedAt <= request.time &&
+        isValidAppUpdateRelease(incoming());
+
+      allow update: if isAdminOrOwner() &&
+        isValidAppUpdateRelease(incoming()) &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().updatedAt is timestamp && incoming().updatedAt <= request.time &&
+        incoming().diff(existing()).affectedKeys().hasOnly([
+          'versionCode', 'versionName', 'fileName', 'fileSizeBytes', 'sha256Checksum',
+          'downloadUrl', 'releaseNotes', 'isMandatory',
+          'publishedByEmail', 'publishedByRole', 'publishedByUid', 'updatedAt'
+        ]);
+
+      allow delete: if isAdminOrOwner();
+    }
+
+    // Owner-only Ads configuration (hidden from Admins/Users in UI, readable only by authorized team for display)
+    match /app_settings/ads_config {
+      allow get: if isAuthorizedMember();
+      allow list: if false;
+
+      allow create: if isOwnerEmail() &&
+        incoming().keys().hasAll(['adsEnabled', 'adsMode', 'updatedByEmail', 'createdAt', 'updatedAt']) &&
+        incoming().keys().hasOnly([
+          'adsEnabled', 'adsMode', 'adCodeSnippet', 'sponsorTitle',
+          'sponsorSubtitle', 'sponsorCtaLabel', 'sponsorTargetUrl',
+          'updatedByEmail', 'createdAt', 'updatedAt'
+        ]) &&
+        incoming().createdAt is timestamp && incoming().createdAt <= request.time &&
+        incoming().updatedAt is timestamp && incoming().updatedAt <= request.time &&
+        isValidAdsConfig(incoming());
+
+      allow update: if isOwnerEmail() &&
+        isValidAdsConfig(incoming()) &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().updatedAt is timestamp && incoming().updatedAt <= request.time &&
+        incoming().diff(existing()).affectedKeys().hasOnly([
+          'adsEnabled', 'adsMode', 'adCodeSnippet', 'sponsorTitle',
+          'sponsorSubtitle', 'sponsorCtaLabel', 'sponsorTargetUrl',
+          'updatedByEmail', 'updatedAt'
+        ]);
+
+      allow delete: if isOwnerEmail();
+    }
+
+    // Custom Owner-marked weighbridge slip templates (used during OCR analysis for all authorized users)
+    match /slip_templates/{templateId} {
+      allow get: if isAuthorizedMember() && isValidId(templateId);
+      allow list: if isAuthorizedMember();
+
+      allow create: if isOwnerEmail() &&
+        isValidId(templateId) &&
+        incoming().keys().hasAll([
+          'formatName', 'vehicleBox', 'weightBox', 'isActive',
+          'createdByEmail', 'createdByUid', 'createdAt', 'updatedAt'
+        ]) &&
+        incoming().keys().hasOnly([
+          'formatName', 'headerHint', 'vehicleBox', 'vehicleLabelHint',
+          'weightBox', 'weightLabelHint', 'dateBox', 'dateLabelHint',
+          'notes', 'isActive', 'createdByEmail', 'createdByUid', 'createdAt', 'updatedAt'
+        ]) &&
+        incoming().createdAt is timestamp && incoming().createdAt <= request.time &&
+        incoming().updatedAt is timestamp && incoming().updatedAt <= request.time &&
+        isValidSlipTemplate(incoming());
+
+      allow update: if isOwnerEmail() &&
+        isValidId(templateId) &&
+        isValidSlipTemplate(incoming()) &&
+        incoming().createdByEmail == existing().createdByEmail &&
+        incoming().createdByUid == existing().createdByUid &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().updatedAt is timestamp && incoming().updatedAt <= request.time;
+
+      allow delete: if isOwnerEmail() && isValidId(templateId);
     }
   }
 }

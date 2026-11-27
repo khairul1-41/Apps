@@ -36,6 +36,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -55,22 +56,31 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
+import com.example.core.OwnerFirebaseConfigStore
 import com.example.core.OwnerPolicy
 import com.example.core.attemptAutoSignIn
 import com.example.core.authStateFlow
 import com.example.core.configureAppCheck
 import com.example.core.signOutUser
+import com.example.data.model.MemberAccessState
 import com.example.data.ocr.WeighbridgeOcrService
-import com.example.data.remote.TelegramDispatchResult
+import com.example.data.remote.AppUpdateUploadService
 import com.example.data.remote.TelegramRelayService
 import com.example.data.repository.TruckWeightRepository
+import com.example.ui.components.AppUpdatePopupDialog
+import com.example.ui.components.launchSafeApkDownload
+import com.example.ui.screens.AccessCheckingScreen
+import com.example.ui.screens.AccessPendingScreen
 import com.example.ui.screens.AnalysisScreen
 import com.example.ui.screens.AuthScreen
 import com.example.ui.screens.CameraScreen
 import com.example.ui.screens.CropPreviewScreen
 import com.example.ui.screens.HistoryScreen
 import com.example.ui.screens.HomeScreen
+import com.example.ui.screens.OwnerSettingsScreen
 import com.example.ui.screens.SettingsScreen
+import com.example.ui.screens.SlipTemplateMarkerScreen
+import com.example.ui.screens.TeamManagementScreen
 import com.example.ui.theme.NavyContainer
 import com.example.ui.theme.NavyPrimary
 import com.example.ui.theme.PureWhite
@@ -88,6 +98,9 @@ object AppRoutes {
     const val CAMERA = "camera"
     const val CROP_PREVIEW = "crop_preview"
     const val ANALYSIS = "analysis"
+    const val OWNER_SETTINGS = "owner_settings"
+    const val TEAM_MANAGEMENT = "team_management"
+    const val SLIP_TEMPLATES = "slip_templates"
 }
 
 private data class TopTabItem(
@@ -136,6 +149,14 @@ class MainActivity : ComponentActivity() {
             }
         }
     }
+
+    override fun onNewIntent(intent: android.content.Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        if (intent.hasExtra("FIREBASE_APPCHECK_DEBUG_TOKEN")) {
+            configureAppCheck(this, intent)
+        }
+    }
 }
 
 @Composable
@@ -161,37 +182,64 @@ private fun TruckWeightGuardRoot() {
         AuthScreen(onAuthSuccess = {})
     } else {
         val uid = user.uid
-        val email = user.email.orEmpty()
-        val isOwner = OwnerPolicy.isOwner(user)
+        val email = OwnerPolicy.normalizeEmail(user.email).ifEmpty { user.email.orEmpty() }
+        var accessRefreshNonce by remember(uid) { mutableIntStateOf(0) }
+        val databaseId = remember(context) { context.getString(R.string.firestore_database_id) }
+        val accessRepository = remember(uid, accessRefreshNonce) {
+            TruckWeightRepository(FirebaseFirestore.getInstance(databaseId))
+        }
+        val accessState by accessRepository.observeMemberAccess(user)
+            .collectAsStateWithLifecycle(initialValue = MemberAccessState.Checking)
 
-        key(uid) {
-            val viewModel: TruckWeightViewModel = viewModel(
-                key = uid,
-                factory = viewModelFactory {
-                    initializer {
-                        val app = checkNotNull(this[APPLICATION_KEY]) {
-                            "APPLICATION_KEY missing from CreationExtras"
-                        }
-                        val databaseId = app.getString(R.string.firestore_database_id)
-                        val db = FirebaseFirestore.getInstance(databaseId)
-                        TruckWeightViewModel(
-                            repository = TruckWeightRepository(db),
-                            ocrService = WeighbridgeOcrService(app),
-                            telegramRelayService = TelegramRelayService(app),
-                            currentUserId = uid,
-                            userEmail = email,
-                            isOwner = isOwner
-                        )
+        when (val access = accessState) {
+            MemberAccessState.Checking -> {
+                AccessCheckingScreen()
+            }
+
+            is MemberAccessState.Unauthorized -> {
+                AccessPendingScreen(
+                    email = access.email.ifBlank { email },
+                    errorMessage = access.errorMessage,
+                    onRefreshAccess = { accessRefreshNonce++ },
+                    onSignOut = {
+                        signOutUser(credentialManager = credentialManager, scope = scope)
                     }
-                }
-            )
+                )
+            }
 
-            MainAuthenticatedScaffold(
-                viewModel = viewModel,
-                onSignOut = {
-                    signOutUser(credentialManager = credentialManager, scope = scope)
+            is MemberAccessState.Authorized -> {
+                key(uid, access.role) {
+                    val viewModel: TruckWeightViewModel = viewModel(
+                        key = "${uid}_${access.role.name}",
+                        factory = viewModelFactory {
+                            initializer {
+                                val app = checkNotNull(this[APPLICATION_KEY]) {
+                                    "APPLICATION_KEY missing from CreationExtras"
+                                }
+                                val dbId = app.getString(R.string.firestore_database_id)
+                                val db = FirebaseFirestore.getInstance(dbId)
+                                TruckWeightViewModel(
+                                    repository = TruckWeightRepository(db),
+                                    ocrService = WeighbridgeOcrService(app),
+                                    telegramRelayService = TelegramRelayService(app),
+                                    appUpdateUploadService = AppUpdateUploadService(app),
+                                    ownerConfigStore = OwnerFirebaseConfigStore(app),
+                                    currentUserId = uid,
+                                    userEmail = email,
+                                    userRole = access.role
+                                )
+                            }
+                        }
+                    )
+
+                    MainAuthenticatedScaffold(
+                        viewModel = viewModel,
+                        onSignOut = {
+                            signOutUser(credentialManager = credentialManager, scope = scope)
+                        }
+                    )
                 }
-            )
+            }
         }
     }
 }
@@ -210,14 +258,28 @@ private fun MainAuthenticatedScaffold(
     val historyFilter by viewModel.historyFilter.collectAsStateWithLifecycle()
     val runtimeSettings by viewModel.runtimeSettings.collectAsStateWithLifecycle()
     val ownerAdminConfig by viewModel.ownerAdminConfig.collectAsStateWithLifecycle()
+    val savedOwnerFirebaseConfig by viewModel.savedOwnerFirebaseConfig.collectAsStateWithLifecycle()
+    val ownerConfigActionState by viewModel.ownerConfigActionState.collectAsStateWithLifecycle()
     val workingImageUri by viewModel.workingImageUri.collectAsStateWithLifecycle()
     val isProcessingImage by viewModel.isProcessingImage.collectAsStateWithLifecycle()
     val imageError by viewModel.imageError.collectAsStateWithLifecycle()
     val analysisState by viewModel.analysisState.collectAsStateWithLifecycle()
     val retryingTelegramRecordId by viewModel.retryingTelegramRecordId.collectAsStateWithLifecycle()
     val settingsActionState by viewModel.settingsActionState.collectAsStateWithLifecycle()
+    val authorizedMembersState by viewModel.authorizedMembersState.collectAsStateWithLifecycle()
+    val teamActionState by viewModel.teamActionState.collectAsStateWithLifecycle()
+    val appUpdateRelease by viewModel.appUpdateRelease.collectAsStateWithLifecycle()
+    val activeUpdatePopup by viewModel.activeUpdatePopup.collectAsStateWithLifecycle()
+    val stagedApkState by viewModel.stagedApkState.collectAsStateWithLifecycle()
+    val appUpdatePublishState by viewModel.appUpdatePublishState.collectAsStateWithLifecycle()
+    val hasDriveAccess by viewModel.hasDriveAccess.collectAsStateWithLifecycle()
     val transientMessage by viewModel.transientMessage.collectAsStateWithLifecycle()
+    val adsConfig by viewModel.adsConfig.collectAsStateWithLifecycle()
+    val adsActionState by viewModel.adsActionState.collectAsStateWithLifecycle()
+    val slipTemplates by viewModel.slipTemplates.collectAsStateWithLifecycle()
+    val slipTemplateActionState by viewModel.slipTemplateActionState.collectAsStateWithLifecycle()
 
+    val context = LocalContext.current
     var selectedVehicleKeyForHistory by remember { mutableStateOf<String?>(null) }
     val snackbarHostState = remember { SnackbarHostState() }
 
@@ -335,7 +397,10 @@ private fun MainAuthenticatedScaffold(
                             HomeScreen(
                                 recordsState = recordsState,
                                 userEmail = viewModel.userEmail,
-                                isOwner = viewModel.isOwner,
+                                userRole = viewModel.userRole,
+                                availableUpdate = appUpdateRelease,
+                                adsConfig = adsConfig,
+                                onOpenUpdatePopupClick = viewModel::reopenUpdatePopup,
                                 onScanDocumentClick = {
                                     navController.navigate(AppRoutes.CAMERA) {
                                         launchSingleTop = true
@@ -347,6 +412,11 @@ private fun MainAuthenticatedScaffold(
                                             ActivityResultContracts.PickVisualMedia.ImageOnly
                                         )
                                     )
+                                },
+                                onManageTeamClick = {
+                                    navController.navigate(AppRoutes.TEAM_MANAGEMENT) {
+                                        launchSingleTop = true
+                                    }
                                 },
                                 onRecordClick = { record ->
                                     selectedVehicleKeyForHistory = record.vehicleKey
@@ -375,6 +445,7 @@ private fun MainAuthenticatedScaffold(
                                 onSearchQueryChange = viewModel::updateSearchQuery,
                                 onAlertFilterChange = viewModel::updateAlertFilter,
                                 onDateFilterChange = viewModel::updateDateFilter,
+                                canDeleteRecord = viewModel::canDeleteRecord,
                                 onDeleteRecord = viewModel::deleteRecord
                             )
                         }
@@ -382,12 +453,85 @@ private fun MainAuthenticatedScaffold(
                         composable(AppRoutes.SETTINGS) {
                             SettingsScreen(
                                 userEmail = viewModel.userEmail,
-                                isOwner = viewModel.isOwner,
+                                userRole = viewModel.userRole,
                                 runtimeSettings = runtimeSettings,
                                 ownerAdminConfig = ownerAdminConfig,
+                                savedOwnerFirebaseConfig = savedOwnerFirebaseConfig,
+                                authorizedMembersState = authorizedMembersState,
                                 actionState = settingsActionState,
+                                adsConfig = adsConfig,
+                                adsActionState = adsActionState,
+                                slipTemplates = slipTemplates,
+                                onOpenTeamManagement = {
+                                    navController.navigate(AppRoutes.TEAM_MANAGEMENT) {
+                                        launchSingleTop = true
+                                    }
+                                },
+                                onOpenOwnerSettings = {
+                                    navController.navigate(AppRoutes.OWNER_SETTINGS) {
+                                        launchSingleTop = true
+                                    }
+                                },
+                                onOpenSlipTemplates = {
+                                    navController.navigate(AppRoutes.SLIP_TEMPLATES) {
+                                        launchSingleTop = true
+                                    }
+                                },
+                                onSaveAdsConfig = viewModel::saveOwnerAdsConfig,
+                                onDismissAdsActionState = viewModel::clearAdsActionState,
                                 onSaveOwnerSettings = viewModel::saveOwnerSettings,
                                 onDismissActionState = viewModel::clearSettingsActionState
+                            )
+                        }
+
+                        composable(AppRoutes.TEAM_MANAGEMENT) {
+                            TeamManagementScreen(
+                                callerEmail = viewModel.userEmail,
+                                callerRole = viewModel.userRole,
+                                membersState = authorizedMembersState,
+                                actionState = teamActionState,
+                                appUpdateRelease = appUpdateRelease,
+                                stagedApkState = stagedApkState,
+                                appUpdatePublishState = appUpdatePublishState,
+                                hasDriveAccess = hasDriveAccess,
+                                onDriveTokenGranted = viewModel::setDriveAccessToken,
+                                onDriveAuthError = viewModel::reportDriveAuthError,
+                                onAddMember = viewModel::addTeamMember,
+                                onUpdateRole = viewModel::setMemberRole,
+                                onDeleteMember = viewModel::removeTeamMember,
+                                onDismissActionState = viewModel::clearTeamActionState,
+                                onPickApkUri = viewModel::stagePickedApk,
+                                onClearStagedApk = viewModel::clearStagedApk,
+                                onPublishAppUpdate = viewModel::publishAppUpdate,
+                                onRemovePublishedUpdate = viewModel::removePublishedAppUpdate,
+                                onDismissAppUpdatePublishState = viewModel::clearAppUpdatePublishState,
+                                onBackClick = { navController.popBackStack() }
+                            )
+                        }
+
+                        composable(AppRoutes.OWNER_SETTINGS) {
+                            OwnerSettingsScreen(
+                                userEmail = viewModel.userEmail,
+                                isOwner = viewModel.isOwner,
+                                savedConfig = savedOwnerFirebaseConfig,
+                                actionState = ownerConfigActionState,
+                                onSaveConfig = viewModel::saveOwnerFirebaseConfig,
+                                onClearConfig = viewModel::clearOwnerFirebaseConfig,
+                                onDismissActionState = viewModel::clearOwnerConfigActionState,
+                                onBackClick = { navController.popBackStack() }
+                            )
+                        }
+
+                        composable(AppRoutes.SLIP_TEMPLATES) {
+                            SlipTemplateMarkerScreen(
+                                userEmail = viewModel.userEmail,
+                                isOwner = viewModel.isOwner,
+                                templates = slipTemplates,
+                                actionState = slipTemplateActionState,
+                                onSaveTemplate = viewModel::saveSlipTemplate,
+                                onDeleteTemplate = viewModel::deleteSlipTemplate,
+                                onDismissActionState = viewModel::clearSlipTemplateActionState,
+                                onBackClick = { navController.popBackStack() }
                             )
                         }
 
@@ -440,10 +584,9 @@ private fun MainAuthenticatedScaffold(
                                 analysisState = analysisState,
                                 previewImageUri = workingImageUri,
                                 isRetryingTelegram = retryingTelegramRecordId != null,
-                                onUpdateForm = viewModel::updateAnalysisForm,
+                                onDuplicateOverrideChange = viewModel::setDuplicateOverrideConfirmed,
                                 onConfirmAndSave = viewModel::confirmAndSaveRecord,
                                 onRetryOcr = viewModel::runOcrAnalysis,
-                                onEnterManually = viewModel::openManualEntryFromError,
                                 onRetryTelegram = viewModel::retryTelegramFromCompleted,
                                 onGoToSettings = {
                                     navController.navigate(AppRoutes.SETTINGS) {
@@ -471,6 +614,27 @@ private fun MainAuthenticatedScaffold(
                     }
                 }
             }
+        }
+
+        val pendingUpdate = activeUpdatePopup
+        if (pendingUpdate != null) {
+            AppUpdatePopupDialog(
+                release = pendingUpdate,
+                currentVersionName = BuildConfig.VERSION_NAME,
+                currentVersionCode = BuildConfig.VERSION_CODE.toLong(),
+                onDownloadClick = {
+                    launchSafeApkDownload(context, pendingUpdate.downloadUrl).onFailure { err ->
+                        android.widget.Toast.makeText(
+                            context,
+                            err.localizedMessage ?: "Unable to open APK download link.",
+                            android.widget.Toast.LENGTH_LONG
+                        ).show()
+                    }
+                },
+                onLaterClick = {
+                    viewModel.dismissUpdatePopup(pendingUpdate.versionCode)
+                }
+            )
         }
     }
 }

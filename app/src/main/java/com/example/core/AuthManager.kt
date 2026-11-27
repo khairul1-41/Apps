@@ -30,6 +30,15 @@ import kotlinx.coroutines.withContext
 
 object OwnerPolicy {
     const val OWNER_EMAIL = "lofimusic492@gmail.com"
+    private val EMAIL_REGEX = Regex("^[a-z0-9._%+\\-]+@[a-z0-9.\\-]+\\.[a-z]{2,}$")
+
+    fun normalizeEmail(email: String?): String =
+        email?.trim()?.lowercase(java.util.Locale.US).orEmpty()
+
+    fun isValidEmail(email: String): Boolean {
+        val norm = normalizeEmail(email)
+        return norm.length in 5..128 && EMAIL_REGEX.matches(norm)
+    }
 
     fun isOwner(user: FirebaseUser?): Boolean {
         if (user == null) return false

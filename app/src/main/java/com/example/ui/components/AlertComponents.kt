@@ -278,6 +278,15 @@ fun WeightRecordCard(
                             style = MaterialTheme.typography.bodySmall,
                             color = SlateTextSecondary
                         )
+                        if (!record.createdByEmail.isNullOrBlank()) {
+                            Text(
+                                text = "By: ${record.createdByEmail}",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = SlateTextSecondary,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
                     }
 
                     Column(horizontalAlignment = Alignment.End) {

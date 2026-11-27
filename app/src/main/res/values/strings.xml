@@ -12,4 +12,9 @@
     <string name="camera_permission_rationale">Camera permission is required to capture weighbridge slips directly. You can also upload slips from your gallery without camera access.</string>
     <string name="grant_camera_permission">Grant Camera Access</string>
     <string name="open_app_settings">Open Settings</string>
+    <string name="owner_settings_title">Owner Settings</string>
+    <string name="owner_settings_subtitle">Encrypted Firebase Project Configuration</string>
+    <string name="open_owner_settings">Open Owner Settings</string>
+    <string name="save_firebase_config">Save Configuration Securely</string>
+    <string name="default_app_check_debug_token" translatable="false">95158850-D125-410E-A80F-3CF42093E1BB</string>
 </resources>

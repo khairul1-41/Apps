@@ -1,13 +1,68 @@
 {
   "entities": {
+    "AuthorizedMember": {
+      "title": "AuthorizedMember",
+      "description": "Authorized team member entry keyed by normalized lowercase email, granting USER or ADMIN role access to shared weighbridge operations.",
+      "type": "object",
+      "properties": {
+        "email": {
+          "type": "string",
+          "description": "Normalized lowercase Google email address matching the document ID."
+        },
+        "displayName": {
+          "type": "string",
+          "description": "Optional team member label or operator name."
+        },
+        "role": {
+          "type": "string",
+          "enum": ["ADMIN", "USER"],
+          "description": "Assigned role: ADMIN (add/delete USERs, access/manage records) or USER (scan slips, add records, access all shared records)."
+        },
+        "addedByEmail": {
+          "type": "string",
+          "description": "Verified email of the Owner or Admin who added this member."
+        },
+        "addedByUid": {
+          "type": "string",
+          "description": "Firebase UID of the Owner or Admin who created the member record."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when the member was added."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when the member role or profile was updated."
+        }
+      },
+      "required": [
+        "email",
+        "role",
+        "addedByEmail",
+        "addedByUid",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
     "TruckWeightRecord": {
       "title": "TruckWeightRecord",
-      "description": "A verified weighbridge document record comparing current truck weight against the latest prior weight for the same vehicle.",
+      "description": "A verified weighbridge document record comparing current truck weight against the latest prior weight for the same vehicle across all team records.",
       "type": "object",
       "properties": {
         "userId": {
           "type": "string",
-          "description": "Authenticated Firebase UID of the operator or owner who saved the record."
+          "description": "Authenticated Firebase UID of the user, admin, or owner who saved the record."
+        },
+        "createdByEmail": {
+          "type": "string",
+          "description": "Optional verified email address of the user/admin who logged the record."
+        },
+        "createdByRole": {
+          "type": "string",
+          "enum": ["OWNER", "ADMIN", "USER"],
+          "description": "Optional role label of the member who logged the record."
         },
         "vehicleNumber": {
           "type": "string",
@@ -84,7 +139,7 @@
     },
     "RuntimeSettings": {
       "title": "RuntimeSettings",
-      "description": "Verification thresholds and OCR/relay runtime settings readable by authenticated operators and writable only by the owner.",
+      "description": "Verification thresholds and OCR/relay runtime settings readable by authorized team members and writable only by the owner.",
       "type": "object",
       "properties": {
         "neutralMaxKg": {
@@ -110,6 +165,10 @@
         "telegramRelayUrl": {
           "type": "string",
           "description": "HTTPS URL of the deployed Firebase Cloud Function relay endpoint."
+        },
+        "appCheckDebugToken": {
+          "type": "string",
+          "description": "Owner-managed Firebase App Check debug token UUID synced across team devices."
         },
         "createdAt": {
           "type": "string",
@@ -149,7 +208,7 @@
         },
         "ocrStrictFinalWeight": {
           "type": "boolean",
-          "description": "Enforce strict second/final weighing priority when multiple weighings appear."
+          "description": "Prefer second weighing when multiple empty check weighings appear."
         },
         "createdAt": {
           "type": "string",
@@ -166,20 +225,218 @@
         "createdAt",
         "updatedAt"
       ]
+    },
+    "AdsBannerConfig": {
+      "title": "AdsBannerConfig",
+      "description": "Owner-only managed Ads configuration (hidden from Admins and Users in settings UI) controlling optional in-app banner display.",
+      "type": "object",
+      "properties": {
+        "adsEnabled": {
+          "type": "boolean"
+        },
+        "adsMode": {
+          "type": "string",
+          "enum": ["AD_CODE", "SPONSORED_CARD"]
+        },
+        "adCodeSnippet": {
+          "type": "string",
+          "description": "Owner-entered Ads code, AdMob Ad Unit ID, or HTTPS ad tag."
+        },
+        "sponsorTitle": {
+          "type": "string"
+        },
+        "sponsorSubtitle": {
+          "type": "string"
+        },
+        "sponsorCtaLabel": {
+          "type": "string"
+        },
+        "sponsorTargetUrl": {
+          "type": "string"
+        },
+        "updatedByEmail": {
+          "type": "string"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "adsEnabled",
+        "adsMode",
+        "updatedByEmail",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "SlipFormatTemplate": {
+      "title": "SlipFormatTemplate",
+      "description": "Custom weighbridge slip format marked and uploaded by Owner so Gemini OCR extracts vehicle number, weight, and date accurately for all users.",
+      "type": "object",
+      "properties": {
+        "formatName": {
+          "type": "string"
+        },
+        "headerHint": {
+          "type": "string"
+        },
+        "vehicleBox": {
+          "type": "object",
+          "properties": {
+            "left": { "type": "number" },
+            "top": { "type": "number" },
+            "right": { "type": "number" },
+            "bottom": { "type": "number" }
+          }
+        },
+        "vehicleLabelHint": { "type": "string" },
+        "weightBox": {
+          "type": "object",
+          "properties": {
+            "left": { "type": "number" },
+            "top": { "type": "number" },
+            "right": { "type": "number" },
+            "bottom": { "type": "number" }
+          }
+        },
+        "weightLabelHint": { "type": "string" },
+        "dateBox": {
+          "type": "object",
+          "properties": {
+            "left": { "type": "number" },
+            "top": { "type": "number" },
+            "right": { "type": "number" },
+            "bottom": { "type": "number" }
+          }
+        },
+        "dateLabelHint": { "type": "string" },
+        "notes": { "type": "string" },
+        "isActive": { "type": "boolean" },
+        "createdByEmail": { "type": "string" },
+        "createdByUid": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "formatName",
+        "vehicleBox",
+        "weightBox",
+        "isActive",
+        "createdByEmail",
+        "createdByUid",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "AppUpdateRelease": {
+      "title": "AppUpdateRelease",
+      "description": "App update release metadata published exclusively by Owner or Admins so all authorized users receive an in-app download pop-up notification.",
+      "type": "object",
+      "properties": {
+        "versionCode": {
+          "type": "integer",
+          "description": "Monotonically increasing Android build version code greater than the installed app version."
+        },
+        "versionName": {
+          "type": "string",
+          "description": "Human-readable version label (e.g. 1.1.0)."
+        },
+        "fileName": {
+          "type": "string",
+          "description": "Original APK file name ending with .apk."
+        },
+        "fileSizeBytes": {
+          "type": "integer",
+          "description": "Exact byte size of the uploaded APK package."
+        },
+        "sha256Checksum": {
+          "type": "string",
+          "description": "64-character lowercase hexadecimal SHA-256 digest of the APK file."
+        },
+        "downloadUrl": {
+          "type": "string",
+          "description": "HTTPS download URL pointing to the new APK release."
+        },
+        "releaseNotes": {
+          "type": "string",
+          "description": "Admin message shown inside every user's pop-up update notification."
+        },
+        "isMandatory": {
+          "type": "boolean",
+          "description": "Whether the pop-up notification requires downloading before dismissal."
+        },
+        "publishedByEmail": {
+          "type": "string",
+          "description": "Verified lowercase email of the Owner or Admin who uploaded the update."
+        },
+        "publishedByRole": {
+          "type": "string",
+          "enum": ["OWNER", "ADMIN"],
+          "description": "Role of the publisher (OWNER or ADMIN)."
+        },
+        "publishedByUid": {
+          "type": "string",
+          "description": "Firebase UID of the Owner or Admin who published the release."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "versionCode",
+        "versionName",
+        "fileName",
+        "fileSizeBytes",
+        "sha256Checksum",
+        "downloadUrl",
+        "releaseNotes",
+        "isMandatory",
+        "publishedByEmail",
+        "publishedByRole",
+        "publishedByUid",
+        "createdAt",
+        "updatedAt"
+      ]
     }
   },
   "firestore": {
+    "/authorized_users/{memberEmail}": {
+      "schema": { "$ref": "#/entities/AuthorizedMember" },
+      "description": "Managed multi-user access directory keyed by lowercase email. Owner creates/promotes/deletes ADMINs and USERs; ADMINs add/delete USERs."
+    },
     "/truck_weight_records/{recordId}": {
       "schema": { "$ref": "#/entities/TruckWeightRecord" },
-      "description": "Weighbridge verification records scoped by userId, with global read/audit access for the verified owner."
+      "description": "Shared weighbridge verification records readable by all authorized USERs, ADMINs, and the OWNER."
     },
     "/app_settings/runtime_config": {
       "schema": { "$ref": "#/entities/RuntimeSettings" },
-      "description": "Singleton runtime thresholds and relay configuration readable by signed-in operators and writable only by the owner."
+      "description": "Singleton runtime thresholds, relay configuration, and synced App Check token readable by authorized members and writable only by the owner."
     },
     "/app_settings/owner_admin": {
       "schema": { "$ref": "#/entities/OwnerAdminConfig" },
       "description": "Owner-only admin metadata document."
+    },
+    "/app_settings/ads_config": {
+      "schema": { "$ref": "#/entities/AdsBannerConfig" },
+      "description": "Owner-managed Ads banner configuration readable by authorized members for display and writable only by Owner."
+    },
+    "/app_settings/app_update": {
+      "schema": { "$ref": "#/entities/AppUpdateRelease" },
+      "description": "Active app update release metadata readable by all authorized members and writable/deletable only by Owner or Admins."
+    },
+    "/slip_templates/{templateId}": {
+      "schema": { "$ref": "#/entities/SlipFormatTemplate" },
+      "description": "Custom Owner-marked weighbridge slip templates readable by all authorized members for OCR extraction and writable only by Owner."
     }
   }
 }

@@ -25,10 +25,12 @@ import androidx.compose.material.icons.filled.AdminPanelSettings
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.DocumentScanner
 import androidx.compose.material.icons.filled.Error
+import androidx.compose.material.icons.filled.Group
 import androidx.compose.material.icons.filled.Inventory2
 import androidx.compose.material.icons.filled.LocalShipping
 import androidx.compose.material.icons.filled.PhotoLibrary
 import androidx.compose.material.icons.filled.Shield
+import androidx.compose.material.icons.filled.SystemUpdate
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
@@ -50,10 +52,16 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import com.example.BuildConfig
+import com.example.data.model.AdsBannerConfig
 import com.example.data.model.AlertStatus
+import com.example.data.model.AppUpdateRelease
 import com.example.data.model.TruckWeightRecord
 import com.example.data.model.UiState
+import com.example.data.model.UserRole
+import com.example.data.remote.AppUpdateUrlValidator
 import com.example.ui.components.KpiMetricCard
+import com.example.ui.components.OwnerAdBannerView
 import com.example.ui.components.WeightRecordCard
 import com.example.ui.theme.AlertRed
 import com.example.ui.theme.AlertRedContainer
@@ -73,9 +81,13 @@ import com.example.ui.theme.SteelContainer
 fun HomeScreen(
     recordsState: UiState<List<TruckWeightRecord>>,
     userEmail: String,
-    isOwner: Boolean,
+    userRole: UserRole,
+    availableUpdate: AppUpdateRelease? = null,
+    adsConfig: AdsBannerConfig = AdsBannerConfig(),
+    onOpenUpdatePopupClick: () -> Unit = {},
     onScanDocumentClick: () -> Unit,
     onUploadGalleryClick: () -> Unit,
+    onManageTeamClick: () -> Unit,
     onRecordClick: (TruckWeightRecord) -> Unit,
     onViewAllHistoryClick: () -> Unit,
     onSignOutClick: () -> Unit,
@@ -103,9 +115,55 @@ fun HomeScreen(
             item {
                 HomeHeaderCard(
                     userEmail = userEmail,
-                    isOwner = isOwner,
+                    userRole = userRole,
+                    onManageTeamClick = onManageTeamClick,
                     onSignOutClick = onSignOutClick
                 )
+            }
+
+            if (availableUpdate != null &&
+                availableUpdate.versionCode > BuildConfig.VERSION_CODE.toLong() &&
+                AppUpdateUrlValidator.isSafeHttpsDownloadUrl(availableUpdate.downloadUrl)
+            ) {
+                item {
+                    Card(
+                        onClick = onOpenUpdatePopupClick,
+                        shape = RoundedCornerShape(16.dp),
+                        colors = CardDefaults.cardColors(containerColor = SignalGreenContainer),
+                        border = BorderStroke(1.dp, SignalGreen),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("home_update_banner")
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(14.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(12.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Filled.SystemUpdate,
+                                contentDescription = "New Update Available",
+                                tint = SignalGreen,
+                                modifier = Modifier.size(28.dp)
+                            )
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = "New App Update v${availableUpdate.versionName} Ready",
+                                    style = MaterialTheme.typography.titleSmall,
+                                    color = NavyPrimary,
+                                    fontWeight = FontWeight.Bold
+                                )
+                                Text(
+                                    text = "Uploaded by ${availableUpdate.publishedByRole} • Tap to download",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = NavyPrimary
+                                )
+                            }
+                        }
+                    }
+                }
             }
 
             item {
@@ -361,6 +419,12 @@ fun HomeScreen(
                 }
             }
 
+            if (adsConfig.adsEnabled) {
+                item {
+                    OwnerAdBannerView(adsConfig = adsConfig)
+                }
+            }
+
             item { Spacer(modifier = Modifier.height(12.dp)) }
         }
     }
@@ -369,9 +433,17 @@ fun HomeScreen(
 @Composable
 private fun HomeHeaderCard(
     userEmail: String,
-    isOwner: Boolean,
+    userRole: UserRole,
+    onManageTeamClick: () -> Unit,
     onSignOutClick: () -> Unit
 ) {
+    val isPrivileged = userRole.canManageUsers
+    val badgeText = when (userRole) {
+        UserRole.OWNER -> "OWNER ADMIN VERIFIED"
+        UserRole.ADMIN -> "ADMIN ACCESS"
+        UserRole.USER -> "SHARED TEAM USER"
+    }
+
     Box(
         modifier = Modifier
             .fillMaxWidth()
@@ -436,26 +508,53 @@ private fun HomeHeaderCard(
                 }
             }
 
-            Surface(
-                color = if (isOwner) SignalGreen.copy(alpha = 0.18f) else PureWhite.copy(alpha = 0.12f),
-                shape = RoundedCornerShape(999.dp)
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
             ) {
-                Row(
-                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                Surface(
+                    color = if (isPrivileged) SignalGreen.copy(alpha = 0.18f) else PureWhite.copy(alpha = 0.12f),
+                    shape = RoundedCornerShape(999.dp)
                 ) {
-                    Icon(
-                        imageVector = Icons.Filled.AdminPanelSettings,
-                        contentDescription = null,
-                        tint = if (isOwner) SignalGreen else PureWhite,
-                        modifier = Modifier.size(14.dp)
-                    )
-                    Text(
-                        text = if (isOwner) "OWNER ADMIN VERIFIED" else "OPERATOR SESSION",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = PureWhite
-                    )
+                    Row(
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Filled.AdminPanelSettings,
+                            contentDescription = null,
+                            tint = if (isPrivileged) SignalGreen else PureWhite,
+                            modifier = Modifier.size(14.dp)
+                        )
+                        Text(
+                            text = badgeText,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = PureWhite
+                        )
+                    }
+                }
+
+                if (userRole.canManageUsers) {
+                    TextButton(
+                        onClick = onManageTeamClick,
+                        modifier = Modifier.testTag("home_manage_team_button")
+                    ) {
+                        Icon(
+                            imageVector = Icons.Filled.Group,
+                            contentDescription = "Manage Team",
+                            tint = SignalGreen,
+                            modifier = Modifier.size(16.dp)
+                        )
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text(
+                            text = "Admin Panel",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = SignalGreen,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
                 }
             }
         }

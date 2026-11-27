@@ -30,3 +30,9 @@ firebase deploy --only functions,firestore:rules
 - Run unit tests: `gradle :app:testDebugUnitTest`
 - Build debug APK: `gradle :app:assembleDebug` (output in `app/build/outputs/apk/debug/app-debug.apk`)
 - Test Firestore rules locally: `FIRESTORE_EMULATOR_HOST="127.0.0.1:8085" node --test firestore.test.js`
+
+## 5. Physical Device App Check Notes
+- `AppCheckInit.kt` uses `DebugAppCheckProviderFactory` only when a launch `Intent` passes a pre-registered `FIREBASE_APPCHECK_DEBUG_TOKEN`.
+- On physical devices installed directly via `APK_DOWNLOAD/app-debug.apk`, it automatically switches to `RecaptchaAppCheckProviderFactory` using the configured `recaptcha_site_key` so OCR calls validate properly.
+- If a specific device or debug-signed build still fails App Check attestation on mobile networks, either register that device's App Check debug UUID from Logcat (`DebugAppCheckProvider`) in **Firebase Console -> App Check -> Apps**, build a release-signed APK, or use **Enter Weight Manually** on the OCR screen.
+

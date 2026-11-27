@@ -172,3 +172,90 @@ exports.sendWeighbridgeToTelegram = onRequest(
     }
   }
 );
+
+exports.requestApkUploadUrl = onRequest(
+  {
+    region: "asia-southeast1",
+    cors: false,
+    maxInstances: 10,
+  },
+  async (req, res) => {
+    if (req.method !== "POST") {
+      res.status(405).json({ ok: false, error: "Method not allowed" });
+      return;
+    }
+
+    const authHeader = req.headers.authorization || "";
+    if (!authHeader.startsWith("Bearer ")) {
+      res.status(401).json({ ok: false, error: "Missing Bearer token" });
+      return;
+    }
+    const idToken = authHeader.slice("Bearer ".length).trim();
+
+    let decodedToken;
+    try {
+      decodedToken = await admin.auth().verifyIdToken(idToken);
+    } catch (err) {
+      res.status(401).json({ ok: false, error: "Invalid Firebase ID token" });
+      return;
+    }
+
+    try {
+      const callerEmail = String(decodedToken.email || "").trim().toLowerCase();
+      if (!callerEmail || decodedToken.email_verified !== true) {
+        res.status(403).json({ ok: false, error: "Verified Google email required" });
+        return;
+      }
+
+      const db = getFirestore(admin.app(), NAMED_DATABASE_ID);
+      const isOwner = callerEmail === "lofimusic492@gmail.com";
+      let isAdmin = false;
+      if (!isOwner) {
+        const memberSnap = await db.collection("authorized_users").doc(callerEmail).get();
+        isAdmin = memberSnap.exists && memberSnap.data().role === "ADMIN";
+      }
+
+      if (!isOwner && !isAdmin) {
+        res.status(403).json({
+          ok: false,
+          error: "Only the Owner or an Admin can upload APK updates",
+        });
+        return;
+      }
+
+      const { fileName, versionCode, contentType } = req.body || {};
+      const safeFileName = String(fileName || "app-update.apk")
+        .replace(/[^a-zA-Z0-9._-]/g, "_")
+        .slice(0, 80);
+      if (!safeFileName.toLowerCase().endsWith(".apk")) {
+        res.status(400).json({ ok: false, error: "Only .apk files are permitted" });
+        return;
+      }
+
+      const parsedVersionCode = Number(versionCode || 1);
+      const objectPath = `app_updates/v${Math.max(1, Math.floor(parsedVersionCode))}_${Date.now()}_${safeFileName}`;
+      const bucket = admin.storage().bucket();
+      const file = bucket.file(objectPath);
+
+      const [uploadUrl] = await file.getSignedUrl({
+        version: "v4",
+        action: "write",
+        expires: Date.now() + 15 * 60 * 1000,
+        contentType: contentType || "application/vnd.android.package-archive",
+      });
+
+      const downloadUrl = `https://firebasestorage.googleapis.com/v0/b/${bucket.name}/o/${encodeURIComponent(objectPath)}?alt=media`;
+
+      res.status(200).json({
+        ok: true,
+        uploadUrl,
+        downloadUrl,
+        objectPath,
+      });
+    } catch (err) {
+      console.error("APK upload URL error:", err);
+      res.status(500).json({ ok: false, error: err.message || "Internal error" });
+    }
+  }
+);
+
